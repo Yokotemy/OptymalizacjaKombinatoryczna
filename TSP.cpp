@@ -114,7 +114,7 @@ std::vector<City> simulatedAnnealing(const std::vector<City>& startPath,
     double T_start,
     double T_end,
     double limitSeconds) {
-    
+
     std::mt19937 gen(std::random_device{}());
     std::uniform_real_distribution<double> rand01(0.0, 1.0);
 
@@ -131,34 +131,43 @@ std::vector<City> simulatedAnnealing(const std::vector<City>& startPath,
     double T = T_start;
 
     while (true) {
-        // 1. Aktualizacja czasu i temperatury - robimy to rzadko, żeby nie marnować mocy CPU
+        // 1. Aktualizacja parametrów co 65536 iteracji
         if ((iterations & 65535) == 0) {
             auto now = std::chrono::steady_clock::now();
             double elapsed = std::chrono::duration<double>(now - startTime).count();
 
-            if (elapsed >= limitSeconds) break; // Tutaj kończymy pętlę po upływie czasu
+            if (elapsed >= limitSeconds) break;
 
             double progress = elapsed / limitSeconds;
 
-            
-            // Uzależnienie T od ilości miast dla lepszego radzenia sobie przy wpadaniu w minima lokalne
-            if (n > 400) {
-                T = T_start * std::pow(1.0 - progress, 4); // Potęgowe dla dużych danych
+            if (n >= 400) {
+                // --- MECHANIZM REHEAT DLA DUŻYCH ZBIORÓW ---
+                // Jeśli jesteśmy między 80% a 85% czasu, podbijamy temperaturę (faza "ratunkowa")
+                if (progress > 0.80 && progress < 0.85) {
+                    // Reheat: liniowo wracamy na chwilę do wyższej temperatury
+                    double reheatProgress = (progress - 0.80) / 0.05;
+                    T = T_start * 0.1 * (1.0 - reheatProgress); // Skok do 10% T_start i powolny spadek
+                } else {
+                    // Standardowe chłodzenie potęgowe (skalowane do n)
+                    double power = (n >= 900) ? 6.0 : 4.0;
+                    T = T_start * std::pow(1.0 - progress, power);
+                }
             } else {
-                T = T_start * std::pow(T_end / T_start, progress); // Wykładnicze dla małych
+                // Dla małych zbiorów - czyste chłodzenie wykładnicze
+                T = T_start * std::pow(T_end / T_start, progress);
             }
         }
 
-        // 2. Logika SA - to wykonuje się miliardy razy w KAŻDEJ iteracji
+        // 2. Rdzeń algorytmu (2-opt)
         int i = distIdx(gen);
         int j = distIdx(gen);
-        
+
         if (i != j) {
             if (i > j) std::swap(i, j);
 
+            // Szybka delta O(1)
             double delta = getDelta(current, i, j);
 
-            // Kryterium Metropolis
             if (delta < 0 || (T > 0 && rand01(gen) < std::exp(-delta / T))) {
                 std::reverse(current.begin() + i, current.begin() + j + 1);
                 currentDist += delta;
@@ -169,9 +178,7 @@ std::vector<City> simulatedAnnealing(const std::vector<City>& startPath,
                 }
             }
         }
-
         iterations++;
     }
-
-    return best; 
+    return best;
 }
