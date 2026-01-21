@@ -113,58 +113,65 @@ inline double getDelta(const std::vector<City>& path, int i, int j) {
 std::vector<City> simulatedAnnealing(const std::vector<City>& startPath,
     double T_start,
     double T_end,
-    double limitSeconds)
-{
+    double limitSeconds) {
+    
     std::mt19937 gen(std::random_device{}());
     std::uniform_real_distribution<double> rand01(0.0, 1.0);
 
     int n = startPath.size();
-    if (n <= 3) return startPath;
-
     std::vector<City> current = startPath;
     std::vector<City> best = startPath;
-
     double currentDist = calculateDistance(current);
     double bestDist = currentDist;
-    double T = T_start; // Inicjalizacja temperatury poza pętlą czasową
 
     auto startTime = std::chrono::steady_clock::now();
     std::uniform_int_distribution<int> distIdx(1, n - 2);
 
     long long iterations = 0;
+    double T = T_start;
+
     while (true) {
-        // Co 16384 iteracji aktualizujemy temperaturę i sprawdzamy czas
-        if ((iterations & 16383) == 0) {
+        // 1. Aktualizacja czasu i temperatury - robimy to rzadko, żeby nie marnować mocy CPU
+        if ((iterations & 65535) == 0) {
             auto now = std::chrono::steady_clock::now();
             double elapsed = std::chrono::duration<double>(now - startTime).count();
 
-            if (elapsed >= limitSeconds) break;
+            if (elapsed >= limitSeconds) break; // Tutaj kończymy pętlę po upływie czasu
 
-            // Chłodzenie nieliniowe zależne od postępu czasu
             double progress = elapsed / limitSeconds;
-            T = T_start * std::pow(T_end / T_start, progress);
-        }
-        iterations++;
 
-        // 1. Losowanie indeksów dla 2-opt
-        int i = distIdx(gen);
-        int j = distIdx(gen);
-        if (i == j) continue;
-        if (i > j) std::swap(i, j);
-
-        // 2. Bardzo szybka ocena zmiany (Delta)
-        double delta = getDelta(current, i, j);
-
-        // 3. Akceptacja Metropolis
-        if (delta < 0 || (T > 0 && rand01(gen) < std::exp(-delta / T))) {
-            std::reverse(current.begin() + i, current.begin() + j + 1);
-            currentDist += delta;
-
-            if (currentDist < bestDist) {
-                bestDist = currentDist;
-                best = current;
+            
+            // Uzależnienie T od ilości miast dla lepszego radzenia sobie przy wpadaniu w minima lokalne
+            if (n > 400) {
+                T = T_start * std::pow(1.0 - progress, 4); // Potęgowe dla dużych danych
+            } else {
+                T = T_start * std::pow(T_end / T_start, progress); // Wykładnicze dla małych
             }
         }
+
+        // 2. Logika SA - to wykonuje się miliardy razy w KAŻDEJ iteracji
+        int i = distIdx(gen);
+        int j = distIdx(gen);
+        
+        if (i != j) {
+            if (i > j) std::swap(i, j);
+
+            double delta = getDelta(current, i, j);
+
+            // Kryterium Metropolis
+            if (delta < 0 || (T > 0 && rand01(gen) < std::exp(-delta / T))) {
+                std::reverse(current.begin() + i, current.begin() + j + 1);
+                currentDist += delta;
+
+                if (currentDist < bestDist) {
+                    bestDist = currentDist;
+                    best = current;
+                }
+            }
+        }
+
+        iterations++;
     }
-    return best;
+
+    return best; 
 }
