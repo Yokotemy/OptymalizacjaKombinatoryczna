@@ -4,12 +4,18 @@
 #include <cmath>
 #include <random>
 #include <algorithm>
+#include <chrono>
 #include <set>
+#include <vector>
 
 std::vector<City> cities;
-void generateMap(int number, int maxDistance) {
-    std::ofstream file("citiesMap.txt");
-    if (!file) { std::cerr << "Nie udało się otworzyć pliku!\n"; exit(1); }
+
+void generateMap(int number, int maxDistance, const std::string& fileName = "Mapa.txt") {
+    std::ofstream file(fileName);
+    if (!file) {
+        std::cerr << "Nie udało się otworzyć pliku!\n";
+        exit(1);
+    }
 
     std::mt19937 gen(std::random_device{}());
     std::uniform_int_distribution<int> dist(0, maxDistance);
@@ -18,31 +24,31 @@ void generateMap(int number, int maxDistance) {
         file << i + 1 << " " << dist(gen) << " " << dist(gen) << "\n";
     }
     file.close();
-    std::cout << "Wygenerowano miasta.\n";
+    std::cout << "Wygenerowano " << number << " miast do pliku: " << fileName << "\n";
 }
 
 void downloadMap(const std::string& fileName) {
     cities.clear();
     std::ifstream file(fileName);
-    if (!file) { std::cerr << "Nie udało się otworzyć pliku!\n"; return; }
-
-    int id, x, y;
+    if (!file) {
+        std::cerr << "Nie udało się otworzyć pliku: " << fileName << "\n";
+        return;
+    }
+    int id;
+    double x, y;
     while (file >> id >> x >> y) {
         cities.push_back({id, x, y});
     }
     file.close();
 }
-void displayMap() {
-    for (const auto& d : cities)
-        std::cout << d.id << " " << d.x << " " << d.y << "\n";
-}
 
 double distance(const City& a, const City& b) {
     return std::sqrt(std::pow(a.x - b.x, 2) + std::pow(a.y - b.y, 2));
 }
+
 double calculateDistance(const std::vector<City>& path) {
     double dist = 0.0;
-    for (size_t i = 0; i < path.size() - 1; ++i)
+    for (size_t i = 0; i + 1 < path.size(); ++i)
         dist += distance(path[i], path[i+1]);
     return dist;
 }
@@ -69,15 +75,17 @@ std::vector<City> greedyAlgorithm() {
                 }
             }
         }
-
+        if (bestIndex == -1) break;
         visited[bestIndex] = true;
         current = cities[bestIndex];
         greedy.push_back(current);
     }
+    if (!greedy.empty())
+        greedy.push_back(greedy[0]);
 
-    greedy.push_back(greedy[0]);
     return greedy;
 }
+
 void displayPath(const std::vector<City>& path) {
     for (size_t i = 0; i < path.size(); ++i) {
         std::cout << path[i].id;
@@ -89,60 +97,74 @@ void displayPath(const std::vector<City>& path) {
 void twoOpt(std::vector<City>& path, int i, int j) {
     std::reverse(path.begin() + i, path.begin() + j + 1);
 }
-bool hasDuplicate(const std::vector<City>& path) {
-    std::set<int> ids;
-    for (size_t i = 0; i < path.size() - 1; i++) {
-        if (!ids.insert(path[i].id).second)
-            return true;
-    }
-    return false;
+
+// Szybka kalkulacja delty - klucz do 3-minutowej optymalizacji
+inline double getDelta(const std::vector<City>& path, int i, int j) {
+    const City& A = path[i - 1];
+    const City& B = path[i];
+    const City& C = path[j];
+    const City& D = path[j + 1];
+
+    double distBefore = distance(A, B) + distance(C, D);
+    double distAfter  = distance(A, C) + distance(B, D);
+    return distAfter - distBefore;
 }
-std::vector<City> simulatedAnnealing(
-    const std::vector<City>& startPath,
+
+std::vector<City> simulatedAnnealing(const std::vector<City>& startPath,
     double T_start,
     double T_end,
-    double alpha
-) {
+    double limitSeconds)
+{
     std::mt19937 gen(std::random_device{}());
     std::uniform_real_distribution<double> rand01(0.0, 1.0);
 
     int n = startPath.size();
-    std::vector<City> best = startPath;
+    if (n <= 3) return startPath;
+
     std::vector<City> current = startPath;
+    std::vector<City> best = startPath;
 
-    double bestDist = calculateDistance(best);
-    double currentDist = bestDist;
-    double T = T_start;
+    double currentDist = calculateDistance(current);
+    double bestDist = currentDist;
+    double T = T_start; // Inicjalizacja temperatury poza pętlą czasową
 
-    while (T > T_end) {
-        std::uniform_int_distribution<int> distI(1, n - 3);
-        int i = distI(gen);
-        std::uniform_int_distribution<int> distJ(i + 1, n - 2);
-        int j = distJ(gen);
+    auto startTime = std::chrono::steady_clock::now();
+    std::uniform_int_distribution<int> distIdx(1, n - 2);
 
-        std::vector<City> candidate = current;
-        twoOpt(candidate, i, j);
+    long long iterations = 0;
+    while (true) {
+        // Co 16384 iteracji aktualizujemy temperaturę i sprawdzamy czas
+        if ((iterations & 16383) == 0) {
+            auto now = std::chrono::steady_clock::now();
+            double elapsed = std::chrono::duration<double>(now - startTime).count();
 
-        if (hasDuplicate(candidate)) {
-            std::cerr << "Błąd: duplikaty po 2-opt!\n";
-            exit(1);
+            if (elapsed >= limitSeconds) break;
+
+            // Chłodzenie nieliniowe zależne od postępu czasu
+            double progress = elapsed / limitSeconds;
+            T = T_start * std::pow(T_end / T_start, progress);
         }
+        iterations++;
 
-        double candidateDist = calculateDistance(candidate);
-        double delta = candidateDist - currentDist;
+        // 1. Losowanie indeksów dla 2-opt
+        int i = distIdx(gen);
+        int j = distIdx(gen);
+        if (i == j) continue;
+        if (i > j) std::swap(i, j);
 
-        if (delta < 0 || rand01(gen) < std::exp(-delta / T)) {
-            current = candidate;
-            currentDist = candidateDist;
+        // 2. Bardzo szybka ocena zmiany (Delta)
+        double delta = getDelta(current, i, j);
+
+        // 3. Akceptacja Metropolis
+        if (delta < 0 || (T > 0 && rand01(gen) < std::exp(-delta / T))) {
+            std::reverse(current.begin() + i, current.begin() + j + 1);
+            currentDist += delta;
 
             if (currentDist < bestDist) {
-                best = current;
                 bestDist = currentDist;
+                best = current;
             }
         }
-
-        T *= alpha;
     }
-
     return best;
 }
